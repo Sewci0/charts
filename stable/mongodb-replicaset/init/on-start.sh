@@ -68,9 +68,16 @@ retry_until() {
 
 shutdown_mongo() {
     local host="${1:-localhost}"
+    local auth="${2:-true}"
     local args='force: true'
+    local creds=("${admin_creds[@]}")
+
+    if [[ "${auth}" = false ]]; then
+        creds=()
+    fi
+
     log "Shutting down MongoDB ($args)..."
-    if (! mongo admin --host "${host}" "${admin_creds[@]}" "${ssl_args[@]}" --eval "db.shutdownServer({$args})"); then
+    if (! mongo admin --host "${host}" "${creds[@]}" "${ssl_args[@]}" --eval "db.shutdownServer({$args})"); then
       log "db.shutdownServer() failed, sending the terminate signal"
       kill -TERM "${pid}"
     fi
@@ -87,14 +94,14 @@ init_mongod_standalone() {
 
     local port="27018"
     log "Starting a MongoDB instance as standalone..."
-    mongod --config /data/configdb/mongod.conf --dbpath=/data/db "${auth_args[@]}" --port "${port}" --bind_ip=0.0.0.0 2>&1 | tee -a /work-dir/log.txt 1>&2 &
+    mongod --dbpath=/data/db "${ssl_server_args[@]}" --port "${port}" 2>&1 | tee -a /work-dir/log.txt 1>&2 &
     export pid=$!
     trap shutdown_mongo EXIT
     log "Waiting for MongoDB to be ready..."
     retry_until "localhost:${port}" "db.adminCommand('ping').ok" "1"
     log "Running init js script on standalone mongod"
-    mongo admin --port "${port}" "${admin_creds[@]}" "${ssl_args[@]}" /init/initMongodStandalone.js
-    shutdown_mongo "localhost:${port}"
+    mongo admin --port "${port}" "${ssl_args[@]}" /init/initMongodStandalone.js
+    shutdown_mongo "localhost:${port}" false
 }
 
 my_hostname=$(hostname)
@@ -115,6 +122,7 @@ if [ -f "$ca_crt"  ]; then
     ca_key=/data/configdb/tls.key
     pem=/work-dir/mongo.pem
     ssl_args=(--ssl --sslCAFile "$ca_crt" --sslPEMKeyFile "$pem")
+    ssl_server_args=(--sslMode requireSSL --sslCAFile "$ca_crt" --sslPEMKeyFile "$pem")
 
 # Move into /work-dir
 pushd /work-dir
